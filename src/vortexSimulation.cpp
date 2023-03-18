@@ -12,6 +12,7 @@
 #include "cloud_of_points.hpp"
 #include "runge_kutta.hpp"
 #include "screen.hpp"
+#include <mpi.h>
 
 auto readConfigFile( std::ifstream& input )
 {
@@ -113,66 +114,153 @@ int main( int nargs, char* argv[] )
     auto grid     = std::get<2>(config);
     auto cloud    = std::get<3>(config);
 
-    std::cout << "######## Vortex simultor ########" << std::endl << std::endl;
-    std::cout << "Press P for play animation " << std::endl;
-    std::cout << "Press S to stop animation" << std::endl;
-    std::cout << "Press right cursor to advance step by step in time" << std::endl;
-    std::cout << "Press down cursor to halve the time step" << std::endl;
-    std::cout << "Press up cursor to double the time step" << std::endl;
-
     grid.updateVelocityField(vortices);
 
-    Graphisme::Screen myScreen( {resx,resy}, {grid.getLeftBottomVertex(), grid.getRightTopVertex()} );
-    bool animate=false;
-    double dt = 0.1;
-
+    //MPI_Status status;
+    //MPI_Request request;
+    int rank;
+    int nbp;
+    MPI_Init(&nargs, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &nbp);
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     
-    while (myScreen.isOpen())
+    if(rank == 0)
     {
-        auto start = std::chrono::system_clock::now();
+        bool animate=false;
+        double dt = 0.1;
         bool advance = false;
-        // on inspecte tous les évènements de la fenêtre qui ont été émis depuis la précédente itération
-        sf::Event event;
-        while (myScreen.pollEvent(event))
+        int send_0 = 0;
+
+        std::cout << "######## Vortex simultor ########" << std::endl << std::endl;
+        std::cout << "Press P for play animation " << std::endl;
+        std::cout << "Press S to stop animation" << std::endl;
+        std::cout << "Press right cursor to advance step by step in time" << std::endl;
+        std::cout << "Press down cursor to halve the time step" << std::endl;
+        std::cout << "Press up cursor to double the time step" << std::endl;
+
+        Graphisme::Screen myScreen( {resx,resy}, {grid.getLeftBottomVertex(), grid.getRightTopVertex()} );
+
+        while (myScreen.isOpen())
         {
-            // évènement "fermeture demandée" : on ferme la fenêtre
-            if (event.type == sf::Event::Closed)
-                myScreen.close();
-            if (event.type == sf::Event::Resized)
+            auto start = std::chrono::system_clock::now();
+            advance = false;
+
+            // on inspecte tous les évènements de la fenêtre qui ont été émis depuis la précédente itération
+            sf::Event event;
+
+            while (myScreen.pollEvent(event))
             {
-                // on met à jour la vue, avec la nouvelle taille de la fenêtre
-                myScreen.resize(event);
+                // évènement "fermeture demandée" : on ferme la fenêtre
+                if (event.type == sf::Event::Closed)
+                    myScreen.close();
+                if (event.type == sf::Event::Resized)
+                {
+                    // on met à jour la vue, avec la nouvelle taille de la fenêtre
+                    myScreen.resize(event);
+                }
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::P))
+                {
+                    animate = true;
+                    send_0 = 1;
+                }
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::S))
+                {
+                    animate = false;
+                    send_0 = 1;
+                }
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))
+                {
+                    dt *= 2;
+                    send_0 = 1;
+                }
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) 
+                {
+                    dt /= 2;
+                    send_0 = 1;
+                }
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) 
+                {
+                    advance = true;
+                    send_0 = 1;
+                }
+
+                //if (send_0 == 1)
+                //{
+                    MPI_Send(&animate, 1, MPI_C_BOOL, 1, 0, MPI_COMM_WORLD);
+                    std::cout << "Envio " << animate << std::endl;
+                    MPI_Send(&dt, 1, MPI_DOUBLE, 1, 1, MPI_COMM_WORLD);
+                    MPI_Send(&advance, 1, MPI_C_BOOL, 1, 2, MPI_COMM_WORLD);
+                    send_0 = 0;
+                //}
             }
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::P)) animate = true;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::S)) animate = false;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) dt *= 2;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) dt /= 2;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) advance = true;
+               
+            if (animate | advance)
+            {
+                //std::cout << "xxxxxxxxxxxxxx" << std::endl;   
+                MPI_Recv(cloud.data(), cloud.numberOfPoints() * 2, MPI_DOUBLE, 1, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                //std::cout << "RECIBO cloud" << std::endl;
+                MPI_Recv(grid.data(), grid.cellGeometry().first * grid.cellGeometry().second * 2, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);    
+                MPI_Recv(vortices.data(), vortices.numberOfVortices() * 3, MPI_DOUBLE, 1, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+
+            myScreen.clear(sf::Color::Black);
+            std::string strDt = std::string("Time step : ") + std::to_string(dt);
+            myScreen.drawText(strDt, Geometry::Point<double>{50, double(myScreen.getGeometry().second-96)});
+            myScreen.displayVelocityField(grid, vortices);
+            myScreen.displayParticles(grid, vortices, cloud);
+            auto end = std::chrono::system_clock::now();
+            std::chrono::duration<double> diff = end - start;
+            std::string str_fps = std::string("FPS : ") + std::to_string(1./diff.count());
+            myScreen.drawText(str_fps, Geometry::Point<double>{300, double(myScreen.getGeometry().second-96)});
+            myScreen.display();
+           
         }
-        if (animate | advance)
-        {
-            if (isMobile)
-            {
-                cloud = Numeric::solve_RK4_movable_vortices(dt, grid, vortices, cloud);
-            }
-            else
-            {
-                cloud = Numeric::solve_RK4_fixed_vortices(dt, grid, cloud);
-            }
-        }
-        myScreen.clear(sf::Color::Black);
-        std::string strDt = std::string("Time step : ") + std::to_string(dt);
-        myScreen.drawText(strDt, Geometry::Point<double>{50, double(myScreen.getGeometry().second-96)});
-        myScreen.displayVelocityField(grid, vortices);
-        myScreen.displayParticles(grid, vortices, cloud);
-        auto end = std::chrono::system_clock::now();
-        std::chrono::duration<double> diff = end - start;
-        std::string str_fps = std::string("FPS : ") + std::to_string(1./diff.count());
-        myScreen.drawText(str_fps, Geometry::Point<double>{300, double(myScreen.getGeometry().second-96)});
-        myScreen.display();
-        
-        
+
     }
 
+    if (rank == 1)
+    {   
+        bool animate = false;
+        double dt = 0.1;
+        bool advance = false;
+        //int send_1 = 0;
+
+        while (true)
+        {
+            //if (send_1 == 0)
+            //{
+                MPI_Recv(&animate, 1, MPI_C_BOOL, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                //std::cout << "RECIBO " << animate << std::endl;
+                MPI_Recv(&dt, 1, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(&advance, 1, MPI_C_BOOL, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Probe(0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            //}
+
+            if (animate | advance)
+            {
+                if (isMobile)
+                {
+                    cloud = Numeric::solve_RK4_movable_vortices(dt, grid, vortices, cloud);
+                    advance = false;
+                }
+                else
+                {
+                    cloud = Numeric::solve_RK4_fixed_vortices(dt, grid, cloud);
+                    advance = false;
+                }
+
+                //send_1 = 1;
+                
+                MPI_Send(cloud.data(), cloud.numberOfPoints() * 2, MPI_DOUBLE, 0, 3, MPI_COMM_WORLD);
+                //std::cout << "envio CLOUD" << std::endl;
+                MPI_Send(grid.data(), grid.cellGeometry().first * grid.cellGeometry().second * 2, MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
+                MPI_Send(vortices.data(), vortices.numberOfVortices() * 3, MPI_DOUBLE, 0, 5, MPI_COMM_WORLD);
+                //MPI_Probe(0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+        }
+
+    }
+
+    MPI_Finalize();
     return EXIT_SUCCESS;
  }
