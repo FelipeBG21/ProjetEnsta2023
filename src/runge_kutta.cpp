@@ -1,6 +1,7 @@
 #include <iostream>
 #include "runge_kutta.hpp"
 #include "cartesian_grid_of_speed.hpp"
+#include <omp.h>
 using namespace Geometry;
 
 Geometry::CloudOfPoints
@@ -12,6 +13,7 @@ Numeric::solve_RK4_fixed_vortices( double dt, CartesianGridOfSpeed const& t_velo
 
     Geometry::CloudOfPoints newCloud(t_points.numberOfPoints());
     // On ne bouge que les points :
+    #pragma omp parallel
     for ( std::size_t iPoint=0; iPoint<t_points.numberOfPoints(); ++iPoint)
     {
         point  p = t_points[iPoint];
@@ -40,6 +42,7 @@ Numeric::solve_RK4_movable_vortices( double dt, CartesianGridOfSpeed& t_velocity
     using point  = Simulation::Vortices::point;
 
     Geometry::CloudOfPoints newCloud(t_points.numberOfPoints());
+    #pragma omp parallel
     // On ne bouge que les points :
     for ( std::size_t iPoint=0; iPoint<t_points.numberOfPoints(); ++iPoint)
     {
