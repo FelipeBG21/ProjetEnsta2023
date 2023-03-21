@@ -116,20 +116,21 @@ int main( int nargs, char* argv[] )
 
     grid.updateVelocityField(vortices);
 
-    //MPI_Status status;
+    MPI_Status status;
     //MPI_Request request;
     int rank;
     int nbp;
+    MPI_Comm globcom;
     MPI_Init(&nargs, &argv);
-    MPI_Comm_size(MPI_COMM_WORLD, &nbp);
-	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    
+    MPI_Comm_dup(MPI_COMM_WORLD, &globcom);
+    MPI_Comm_size(globcom, &nbp);
+    MPI_Comm_rank(globcom, &rank);
+
+    char key = 'z';
+
     if(rank == 0)
     {
-        bool animate=false;
         double dt = 0.1;
-        bool advance = false;
-        int send_0 = 0;
 
         std::cout << "######## Vortex simultor ########" << std::endl << std::endl;
         std::cout << "Press P for play animation " << std::endl;
@@ -143,7 +144,6 @@ int main( int nargs, char* argv[] )
         while (myScreen.isOpen())
         {
             auto start = std::chrono::system_clock::now();
-            advance = false;
 
             // on inspecte tous les évènements de la fenêtre qui ont été émis depuis la précédente itération
             sf::Event event;
@@ -152,7 +152,11 @@ int main( int nargs, char* argv[] )
             {
                 // évènement "fermeture demandée" : on ferme la fenêtre
                 if (event.type == sf::Event::Closed)
+                {
                     myScreen.close();
+                    MPI_Abort(MPI_COMM_WORLD, 0);
+                    MPI_Finalize();
+                }
                 if (event.type == sf::Event::Resized)
                 {
                     // on met à jour la vue, avec la nouvelle taille de la fenêtre
@@ -160,47 +164,41 @@ int main( int nargs, char* argv[] )
                 }
                 if (sf::Keyboard::isKeyPressed(sf::Keyboard::P))
                 {
-                    animate = true;
-                    send_0 = 1;
+                    key = 'p';
                 }
                 if (sf::Keyboard::isKeyPressed(sf::Keyboard::S))
                 {
-                    animate = false;
-                    send_0 = 1;
+                    key = 's';
                 }
                 if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))
                 {
-                    dt *= 2;
-                    send_0 = 1;
+                    key = 'a';
+                    dt *= 2; 
                 }
                 if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) 
                 {
+                    key = 'b';
                     dt /= 2;
-                    send_0 = 1;
                 }
                 if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) 
                 {
-                    advance = true;
-                    send_0 = 1;
+                    key = 'd';
                 }
 
-                //if (send_0 == 1)
-                //{
-                    MPI_Send(&animate, 1, MPI_C_BOOL, 1, 0, MPI_COMM_WORLD);
-                    std::cout << "Envio " << animate << std::endl;
-                    MPI_Send(&dt, 1, MPI_DOUBLE, 1, 1, MPI_COMM_WORLD);
-                    MPI_Send(&advance, 1, MPI_C_BOOL, 1, 2, MPI_COMM_WORLD);
-                    send_0 = 0;
-                //}
+                if(key != 'z')
+                {
+                    MPI_Send(&key, 1, MPI_CHAR, 1, 101, MPI_COMM_WORLD);
+                    std::cout << "sending: " << key << std::endl;
+                }
             }
                
-            if (animate | advance)
-            {
-                //std::cout << "xxxxxxxxxxxxxx" << std::endl;   
-                MPI_Recv(cloud.data(), cloud.numberOfPoints() * 2, MPI_DOUBLE, 1, 3, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                //std::cout << "RECIBO cloud" << std::endl;
-                MPI_Recv(grid.data(), grid.cellGeometry().first * grid.cellGeometry().second * 2, MPI_DOUBLE, 1, 4, MPI_COMM_WORLD, MPI_STATUS_IGNORE);    
-                MPI_Recv(vortices.data(), vortices.numberOfVortices() * 3, MPI_DOUBLE, 1, 5, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if ((key == 'p') || (key == 'd'))
+            {  
+                MPI_Recv(cloud.data(), cloud.numberOfPoints() * 2, MPI_DOUBLE, 1, 103, MPI_COMM_WORLD, &status);
+                MPI_Recv(grid.data(), grid.cellGeometry().first * grid.cellGeometry().second * 2, MPI_DOUBLE, 1, 104, MPI_COMM_WORLD, &status);    
+                MPI_Recv(vortices.data(), vortices.numberOfVortices() * 3, MPI_DOUBLE, 1, 105, MPI_COMM_WORLD, &status);
+                MPI_Recv(&key, 1, MPI_CHAR, 1, 102, MPI_COMM_WORLD, &status);
+
             }
 
             myScreen.clear(sf::Color::Black);
@@ -213,49 +211,50 @@ int main( int nargs, char* argv[] )
             std::string str_fps = std::string("FPS : ") + std::to_string(1./diff.count());
             myScreen.drawText(str_fps, Geometry::Point<double>{300, double(myScreen.getGeometry().second-96)});
             myScreen.display();
-           
+
         }
 
     }
 
     if (rank == 1)
     {   
-        bool animate = false;
         double dt = 0.1;
-        bool advance = false;
-        //int send_1 = 0;
 
         while (true)
         {
-            //if (send_1 == 0)
-            //{
-                MPI_Recv(&animate, 1, MPI_C_BOOL, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                //std::cout << "RECIBO " << animate << std::endl;
-                MPI_Recv(&dt, 1, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                MPI_Recv(&advance, 1, MPI_C_BOOL, 0, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                MPI_Probe(0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            //}
+            MPI_Recv(&key, 1, MPI_CHAR, 0, 101, MPI_COMM_WORLD, &status);
+            if (key == 'a')
+            {
+                dt *= 2;
+                key = 'z';
+            }
 
-            if (animate | advance)
+            if (key == 'b')
+            {
+                dt /= 2;
+                key = 'z';
+            }
+
+            if ((key == 'p') || (key == 'd'))
             {
                 if (isMobile)
                 {
                     cloud = Numeric::solve_RK4_movable_vortices(dt, grid, vortices, cloud);
-                    advance = false;
                 }
                 else
                 {
                     cloud = Numeric::solve_RK4_fixed_vortices(dt, grid, cloud);
-                    advance = false;
                 }
 
-                //send_1 = 1;
+                if(key == 'd')
+                {
+                    key = 'z';
+                }
                 
-                MPI_Send(cloud.data(), cloud.numberOfPoints() * 2, MPI_DOUBLE, 0, 3, MPI_COMM_WORLD);
-                //std::cout << "envio CLOUD" << std::endl;
-                MPI_Send(grid.data(), grid.cellGeometry().first * grid.cellGeometry().second * 2, MPI_DOUBLE, 0, 4, MPI_COMM_WORLD);
-                MPI_Send(vortices.data(), vortices.numberOfVortices() * 3, MPI_DOUBLE, 0, 5, MPI_COMM_WORLD);
-                //MPI_Probe(0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Send(cloud.data(), cloud.numberOfPoints() * 2, MPI_DOUBLE, 0, 103, MPI_COMM_WORLD);
+                MPI_Send(grid.data(), grid.cellGeometry().first * grid.cellGeometry().second * 2, MPI_DOUBLE, 0, 104, MPI_COMM_WORLD);
+                MPI_Send(vortices.data(), vortices.numberOfVortices() * 3, MPI_DOUBLE, 0, 105, MPI_COMM_WORLD);
+                MPI_Send(&key, 1, MPI_CHAR, 0, 102, MPI_COMM_WORLD);
             }
         }
 
